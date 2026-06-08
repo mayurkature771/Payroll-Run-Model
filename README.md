@@ -1,279 +1,198 @@
 # Employee Payroll Run Module
 
-## Overview
+A small but complete payroll feature that replaces an HR team's monthly Excel process.
+HR picks a month/year, triggers a payroll run, and views per-employee results (with a
+printable payslip). Built with the preferred stack: **ASP.NET Core 8 Web API + Dapper +
+SQL Server**, with a single-page HTML/JS frontend.
 
-The Employee Payroll Run Module is a payroll processing application developed using **ASP.NET Core 8 Web API**, **Dapper**, and **SQL Server**. The system allows HR users to generate monthly payroll, calculate employee salaries based on attendance, view payroll summaries, and generate printable payslips.
+## Architecture
 
-The application follows a layered architecture consisting of:
+```
+HTML / JS frontend  (wwwroot/index.html)
+        │  fetch JSON
+        ▼
+API Controllers     (EmployeesController, PayrollController)   -> HTTP status codes
+        ▼
+Service Layer       (EmployeeService, PayrollService)          -> business logic, pagination
+        ▼
+Repository Layer    (EmployeeRepository, PayrollRepository)    -> Dapper / ADO.NET
+        ▼
+Stored Procedure    (usp_RunPayroll)                           -> calculation + save
+        ▼
+SQL Server          (Departments, Employees, Attendance, PayrollRuns, PayrollDetails)
+```
 
-* Presentation Layer (HTML, CSS, JavaScript)
-* API Controllers
-* Service Layer
-* Repository Layer
-* SQL Server Database with Stored Procedures
+## Business rules
+
+| Component        | Formula                                        |
+| ---------------- | ---------------------------------------------- |
+| Gross Pay        | `ROUND((Basic ÷ TotalWorkingDays) × DaysPresent, 0)` |
+| PF Deduction     | 12% of Basic Salary                            |
+| Professional Tax | Flat ₹200 / month                              |
+| Net Pay          | `Gross − PF − Professional Tax` (never below 0)|
+| Immutability     | A finalised run can't be edited or deleted     |
+
+Brief example (Ravi, Basic 30000, 26 working / 24 present): Gross **27,692**, PF **3,600**,
+PT **200**, Net **23,892** — verified by a unit test and reproduced by the seed data.
 
 ---
 
-## Features
+## Prerequisites
 
-### Employee Management
+- [.NET SDK 8.0+](https://dotnet.microsoft.com/download)
+- SQL Server — **LocalDB** (ships with Visual Studio / "SQL Server Express LocalDB") or any
+  full SQL Server instance
+- A query tool to run the SQL scripts: **SSMS**, **Azure Data Studio**, or `sqlcmd`
 
-* View employee information
-* Department-wise employee records
-* Attendance-based payroll processing
+---
 
-### Payroll Processing
+## 1. Database setup
 
-* Run payroll for a selected month and year
-* Calculate Gross Salary
-* Calculate PF Deduction (12% of Basic Salary)
-* Apply Professional Tax (₹200)
-* Generate Net Salary
-* Store payroll run history
+Run the three scripts **in order** against your SQL Server instance:
 
-### Payslip Generation
-
-* View employee payslip
-* Print payroll details
-* Monthly payroll summaries
-
-### Validation & Error Handling
-
-* Input validation
-* Business rule validation
-* Global exception handling
-* Proper HTTP status codes
-
-
-## Technology Stack
-
-### Backend
-
-* ASP.NET Core 8 Web API
-* C#
-* Dapper ORM
-* SQL Server
-
-### Frontend
-
-* HTML5
-* CSS3
-* JavaScript (Vanilla JS)
-
-### Testing
-
-* xUnit
-
-### Documentation
-
-* Swagger/OpenAPI
-
-
-
-## Project Structure
-
-```text
-PayrollRunModule
-│
-├── database
-│   ├── 01_schema.sql
-│   ├── 02_seed.sql
-│   └── 03_usp_RunPayroll.sql
-│
-├── src
-│   └── Payroll.Api
-│       ├── Controllers
-│       ├── Services
-│       ├── Repositories
-│       ├── Models
-│       ├── Data
-│       ├── Common
-│       └── wwwroot
-│
-├── tests
-│   └── Payroll.Tests
-│
-└── PayrollRunModule.sln
+```
+database/01_schema.sql        -- creates PayrollDb, tables, FKs, constraints, indexes, immutability triggers
+database/02_seed.sql          -- 2 departments, 5 employees, attendance for the CURRENT month
+database/03_usp_RunPayroll.sql-- the usp_RunPayroll stored procedure
 ```
 
+Using `sqlcmd` with LocalDB (from the `database` folder):
 
-
-## Payroll Calculation Logic
-
-### Gross Salary
-
-```text
-Gross Salary =
-(Basic Salary / Total Working Days) × Days Present
+```powershell
+sqlcmd -S "(localdb)\MSSQLLocalDB" -i 01_schema.sql
+sqlcmd -S "(localdb)\MSSQLLocalDB" -i 02_seed.sql
+sqlcmd -S "(localdb)\MSSQLLocalDB" -i 03_usp_RunPayroll.sql
 ```
 
-### PF Deduction
+> The seed deliberately uses `MONTH(GETDATE())` / `YEAR(GETDATE())`, so attendance is always
+> for the month you run it in — the "current month" the brief asks for.
 
-```text
-PF = 12% of Basic Salary
+### Connection string
+
+Configured in `src/Payroll.Api/appsettings.json` under `ConnectionStrings:PayrollDb`.
+Default (LocalDB):
+
+```
+Server=(localdb)\MSSQLLocalDB;Database=PayrollDb;Trusted_Connection=True;TrustServerCertificate=True;
 ```
 
-### Professional Tax
+Format for a full instance / SQL auth:
 
-```text
-₹200 per month
+```
+Server=YOUR_SERVER;Database=PayrollDb;User Id=USER;Password=PASS;TrustServerCertificate=True;
 ```
 
-### Net Salary
+No secrets are committed; change the connection string in `appsettings.json` (or override via
+`appsettings.local.json`, which is git-ignored).
 
-```text
-Net Salary = Gross Salary - PF - Professional Tax
-```
+---
 
+## 2. Run the API + frontend
 
-
-## Database Setup
-
-### Step 1: Create Database
-
-Execute the SQL scripts in the following order:
-
-```sql
-database/01_schema.sql
-database/02_seed.sql
-database/03_usp_RunPayroll.sql
-```
-
-These scripts will:
-
-* Create PayrollDb database
-* Create required tables
-* Insert sample data
-* Create payroll stored procedures
-
-
-
-## Configure Connection String
-
-Update the connection string in:
-
-```text
-src/Payroll.Api/appsettings.json
-```
-
-Example:
-
-```json
-{
-  "ConnectionStrings": {
-    "PayrollDb": "Server=(localdb)\\MSSQLLocalDB;Database=PayrollDb;Trusted_Connection=True;TrustServerCertificate=True;"
-  }
-}
-```
-
-
-
-## Running the Application
-
-### Restore Packages
-
-```bash
-dotnet restore
-```
-
-### Build Project
-
-```bash
-dotnet build
-```
-
-### Run Application
-
-```bash
+```powershell
 cd src/Payroll.Api
 dotnet run
 ```
 
-Application URL:
+Then open the URL printed in the console (default **http://localhost:5080**):
 
-```text
-http://localhost:5080
-```
+- **`/`** — the HR frontend (select month → Run Payroll → results table → Print payslip)
+- **`/swagger`** — interactive API docs
 
-Swagger URL:
+The frontend is served from `wwwroot`, so it calls the API on the same origin (no CORS setup
+needed for normal use; CORS is still enabled for convenience).
 
-```text
-http://localhost:5080/swagger
-```
+## 3. Run the unit tests
 
-
-
-## Running Unit Tests
-
-Navigate to:
-
-```bash
+```powershell
 cd tests/Payroll.Tests
-```
-
-Run:
-
-```bash
 dotnet test
 ```
 
+---
 
+## API endpoints
 
-## API Endpoints
+| Method | Endpoint                                    | Result                          |
+| ------ | ------------------------------------------- | ------------------------------- |
+| GET    | `/api/employees`                            | 200 — all employees             |
+| POST   | `/api/payroll/run`  body `{ "month", "year" }` | 201 — run summary, **409** if already exists |
+| GET    | `/api/payroll/{month}/{year}`               | 200 (paginated) or 404          |
+| GET    | `/api/payroll/{runId}/slip/{employeeId}`    | 200 or 404                      |
 
-### Employees
+Each payroll line includes: `EmployeeId, Name, BasicSalary, WorkingDays, DaysPresent,
+GrossPay, PFDeduction, ProfessionalTax, NetPay`.
 
-| Method | Endpoint       |
-| ------ | -------------- |
-| GET    | /api/employees |
+Pagination (bonus): `GET /api/payroll/{month}/{year}?page=1&pageSize=50`.
 
-### Payroll
+### Quick test (PowerShell)
 
-| Method | Endpoint                                         |
-| ------ | ------------------------------------------------ |
-| POST   | /api/payroll/run                                 |
-| GET    | /api/payroll/{month}/{year}                      |
-| GET    | /api/payroll/payslip/{employeeId}/{month}/{year} |
+```powershell
+# Run payroll for the current month
+Invoke-RestMethod -Uri http://localhost:5080/api/payroll/run -Method Post `
+  -ContentType 'application/json' -Body '{ "month": 6, "year": 2026 }'
 
+# Fetch it back
+Invoke-RestMethod -Uri http://localhost:5080/api/payroll/6/2026
+```
 
+---
 
-## Sample Seed Data
+## Bonus features included
 
-The project includes:
+- ✅ **HTTP 409 Conflict** when a run already exists for the month/year
+  (enforced by a UNIQUE constraint + `THROW 50409`, mapped to 409 in the repository).
+- ✅ **Unit tests** for the net-pay logic (xUnit, `PayrollCalculatorTests`).
+- ✅ **Pagination** on `GET /api/payroll/{month}/{year}`.
+- ✅ **Printable payslip** per employee (frontend "Print" button → clean print window).
 
-* 2 Departments
-* 5 Employees
-* Monthly Attendance Records
-* Sample Payroll Data
+---
 
-This allows the application to run immediately after database setup without manual data entry.
+## Design decisions & assumptions
 
+- **Attendance is a monthly summary** (`TotalWorkingDays`, `DaysPresent`) per employee, not
+  one row per day. This matches the formula in the brief and keeps the model simple; a daily
+  table could be added later and aggregated.
+- **Gross is rounded to the nearest rupee** (`ROUND(..., 0)`) so the output matches the
+  brief's example exactly (₹27,692 / ₹23,892). PF is kept to 2 decimals.
+- **Immutability** is enforced two ways: a UNIQUE `(Month, Year)` constraint stops a second
+  run, and `INSTEAD OF UPDATE, DELETE` triggers block edits/deletes on the payroll tables.
+  The stored procedure inserts the run header with totals already aggregated, so it never
+  needs to UPDATE.
+- **Snapshotting**: `PayrollDetails` stores the computed values (basic, gross, net, …) at run
+  time. A later salary change never alters a finalised payslip.
+- **Edge cases**:
+  - *0 days present* → Gross 0, Net clamped to 0 (not negative). Seeded for "Karan Mehta".
+  - *Missing attendance* → the SP `LEFT JOIN`s, so an active employee with no attendance row
+    is still included with 0 working/0 present (rather than being silently dropped).
+  - *Divide-by-zero* (0 working days) → guarded in both the SP and `PayrollCalculator`.
+- **Calculation lives in the stored procedure** (the brief requires it). `PayrollCalculator`
+  mirrors the same formula in C# purely so the logic is unit-testable in isolation.
+- **Only active employees** (`IsActive = 1`) are included in a run.
 
+## What I'd add with more time
 
-## Assumptions
+- Persist a `PayrollRunStatus` (Draft → Finalised) so HR can preview before locking.
+- Authentication/authorization (HR role) — currently the API is open for the demo.
+- Server-side, SQL-level pagination (`OFFSET/FETCH`) instead of paging in the service layer;
+  fine at this scale, but cleaner for thousands of rows.
+- Integration tests against a real/LocalDB database for the stored procedure itself.
+- Configurable PF rate / Professional Tax (slabs by salary/state) instead of constants.
+- Export payslip to PDF and email it to employees.
 
-* PF deduction is fixed at 12% of Basic Salary.
-* Professional Tax is fixed at ₹200 per month.
-* Payroll records are immutable after finalization.
-* Attendance data is available before payroll processing.
+## Project structure
 
-
-
-## Future Enhancements
-
-* Employee CRUD operations
-* Authentication & Authorization
-* Export payroll to Excel/PDF
-* Email payslip delivery
-* Advanced payroll reports
-* Role-based access control
-
-
-
-## Author
-
-**Mayur Kature**
-
-ASP.NET Full Stack Developer
-
-Technologies: ASP.NET Core, C#, SQL Server, JavaScript, Angular, Dapper, REST APIs
+```
+PayrollRunModule/
+├─ database/                  01_schema.sql, 02_seed.sql, 03_usp_RunPayroll.sql
+├─ src/Payroll.Api/
+│  ├─ Controllers/            EmployeesController, PayrollController
+│  ├─ Services/               business logic + pagination
+│  ├─ Repositories/           Dapper data access
+│  ├─ Models/                 DTOs
+│  ├─ Common/                 PayrollCalculator, exceptions
+│  ├─ Data/                   DbConnectionFactory
+│  └─ wwwroot/index.html      the HR frontend
+├─ tests/Payroll.Tests/       xUnit tests
+└─ PayrollRunModule.sln
+```
