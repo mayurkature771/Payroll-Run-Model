@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payroll Run Module</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f4f6f9; color: #1f2937; }
+    header { background: #1f4e79; color: #fff; padding: 18px 28px; }
+    header h1 { margin: 0; font-size: 20px; }
+    main { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+    .controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+    label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+    select, input { padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 120px; }
+    button { padding: 9px 16px; border: 0; border-radius: 6px; background: #1f4e79; color: #fff; cursor: pointer; font-size: 14px; }
+    button.secondary { background: #475569; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid #eef2f7; text-align: right; font-size: 14px; }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+    thead th { background: #f1f5f9; color: #334155; }
+    tfoot td { font-weight: 600; background: #f8fafc; }
+    .msg { padding: 10px 14px; border-radius: 6px; margin-top: 12px; font-size: 14px; display: none; }
+    .msg.error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .msg.info  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .spinner { display:none; margin-left: 8px; font-size: 13px; color:#6b7280; }
+    .link { color: #1d4ed8; cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header><h1>Employee Payroll Run Module</h1></header>
+
+  <main>
+    <div class="card">
+      <div class="controls">
+        <div>
+          <label for="month">Month</label>
+          <select id="month"></select>
+        </div>
+        <div>
+          <label for="year">Year</label>
+          <input id="year" type="number" min="2000" max="2100" />
+        </div>
+        <button id="runBtn">Run Payroll</button>
+        <button id="loadBtn" class="secondary">View Saved Run</button>
+        <span id="spinner" class="spinner">Working…</span>
+      </div>
+      <div id="message" class="msg"></div>
+    </div>
+
+    <div class="card" id="resultsCard" style="display:none">
+      <h3 id="resultsTitle"></h3>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Name</th><th>Basic</th><th>Work Days</th><th>Present</th>
+            <th>Gross</th><th>PF</th><th>Prof. Tax</th><th>Net Pay</th><th>Payslip</th>
+          </tr>
+        </thead>
+        <tbody id="resultsBody"></tbody>
+        <tfoot>
+          <tr>
+            <td colspan="8">Total Net Pay</td>
+            <td id="totalNet"></td><td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const API = ''; // same origin (served from wwwroot)
+    const $ = id => document.getElementById(id);
+    const inr = n => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    // Populate month/year defaults to "now"
+    (function init() {
+      const now = new Date();
+      MONTHS.forEach((m, i) => {
+        const o = document.createElement('option');
+        o.value = i + 1; o.textContent = m;
+        $('month').appendChild(o);
+      });
+      $('month').value = now.getMonth() + 1;
+      $('year').value = now.getFullYear();
+    })();
+
+    function showMessage(text, type = 'info') {
+      const el = $('message');
+      el.textContent = text;
+      el.className = 'msg ' + type;
+      el.style.display = 'block';
+    }
+    function clearMessage() { $('message').style.display = 'none'; }
+    function setBusy(b) {
+      $('spinner').style.display = b ? 'inline' : 'none';
+      $('runBtn').disabled = b; $('loadBtn').disabled = b;
+    }
+
+    async function runPayroll() {
+      const month = +$('month').value, year = +$('year').value;
+      clearMessage(); setBusy(true);
+      try {
+        const res = await fetch(`${API}/api/payroll/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ month, year })
+        });
+        if (res.status === 409) {
+          const err = await res.json();
+          showMessage(err.message + ' Showing the existing run instead.', 'info');
+          return loadRun();
+        }
+        if (!res.ok) {
+          const err = await safeJson(res);
+          throw new Error(err?.message || `Run failed (HTTP ${res.status}).`);
+        }
+        const summary = await res.json();
+        showMessage(`Payroll run #${summary.runId} created for ${MONTHS[month-1]} ${year}. ${summary.employeeCount} employees, total net ${inr(summary.totalNetPay)}.`, 'info');
+        await loadRun();
+      } catch (e) {
+        showMessage(e.message, 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadRun() {
+      const month = +$('month').value, year = +$('year').value;
+      clearMessage(); setBusy(true);
+      try {
+        const res = await fetch(`${API}/api/payroll/${month}/${year}`);
+        if (res.status === 404) {
+          $('resultsCard').style.display = 'none';
+          showMessage(`No saved payroll run for ${MONTHS[month-1]} ${year}. Click "Run Payroll" to create one.`, 'info');
+          return;
+        }
+        if (!res.ok) throw new Error(`Failed to load run (HTTP ${res.status}).`);
+        renderRun(await res.json());
+      } catch (e) {
+        showMessage(e.message, 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function renderRun(data) {
+      $('resultsTitle').textContent =
+        `Run #${data.runId} — ${MONTHS[data.month-1]} ${data.year} (${data.employeeCount} employees)`;
+      const body = $('resultsBody');
+      body.innerHTML = '';
+      data.items.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.employeeId}</td>
+          <td>${r.name}</td>
+          <td>${inr(r.basicSalary)}</td>
+          <td>${r.workingDays}</td>
+          <td>${r.daysPresent}</td>
+          <td>${inr(r.grossPay)}</td>
+          <td>${inr(r.pfDeduction)}</td>
+          <td>${inr(r.professionalTax)}</td>
+          <td>${inr(r.netPay)}</td>
+          <td><button class="link" data-emp="${r.employeeId}">Print</button></td>`;
+        body.appendChild(tr);
+      });
+      body.querySelectorAll('button[data-emp]').forEach(btn =>
+        btn.addEventListener('click', () => printPayslip(data.runId, +btn.dataset.emp)));
+      $('totalNet').textContent = inr(data.totalNetPay);
+      $('resultsCard').style.display = 'block';
+    }
+
+    // Bonus: printable payslip per employee (opens a clean print window)
+    async function printPayslip(runId, employeeId) {
+      try {
+        const res = await fetch(`${API}/api/payroll/${runId}/slip/${employeeId}`);
+        if (!res.ok) throw new Error('Payslip not found.');
+        const s = await res.json();
+        const w = window.open('', '_blank', 'width=620,height=720');
+        w.document.write(`
+          <html><head><title>Payslip - ${s.name}</title>
+          <style>
+            body{font-family:Segoe UI,Arial,sans-serif;padding:32px;color:#1f2937}
+            h2{color:#1f4e79;margin:0 0 4px} .sub{color:#6b7280;margin-bottom:20px}
+            table{width:100%;border-collapse:collapse} td{padding:8px;border-bottom:1px solid #eee}
+            td.r{text-align:right} .net{font-weight:700;background:#f1f5f9}
+          </style></head><body>
+          <h2>Payslip</h2>
+          <div class="sub">${MONTHS[s.month-1]} ${s.year} &nbsp;|&nbsp; Run #${s.runId}</div>
+          <table>
+            <tr><td>Employee</td><td class="r">${s.name} (#${s.employeeId})</td></tr>
+            <tr><td>Department</td><td class="r">${s.departmentName}</td></tr>
+            <tr><td>Basic Salary</td><td class="r">${inr(s.basicSalary)}</td></tr>
+            <tr><td>Working Days / Present</td><td class="r">${s.workingDays} / ${s.daysPresent}</td></tr>
+            <tr><td>Gross Pay</td><td class="r">${inr(s.grossPay)}</td></tr>
+            <tr><td>PF Deduction (12%)</td><td class="r">- ${inr(s.pfDeduction)}</td></tr>
+            <tr><td>Professional Tax</td><td class="r">- ${inr(s.professionalTax)}</td></tr>
+            <tr class="net"><td>Net Pay</td><td class="r">${inr(s.netPay)}</td></tr>
+          </table>
+          <script>window.onload=function(){window.print();}<\/script>
+          </body></html>`);
+        w.document.close();
+      } catch (e) {
+        showMessage(e.message, 'error');
+      }
+    }
+
+    async function safeJson(res) { try { return await res.json(); } catch { return null; } }
+
+    $('runBtn').addEventListener('click', runPayroll);
+    $('loadBtn').addEventListener('click', loadRun);
+    loadRun(); // try to show the current month's run on load
+  </script>
+</body>
+</html>
